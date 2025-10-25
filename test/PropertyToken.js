@@ -1,52 +1,43 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 
-describe("PropertyToken", function () {
-  let PropertyToken, propertyToken, owner, addr1, addr2;
+describe("SmartSukukToken", function () {
+  let SmartSukukToken, sukuk, owner, investor1, investor2;
 
-  beforeEach(async function () {
-    [owner, addr1, addr2] = await ethers.getSigners();
-    PropertyToken = await ethers.getContractFactory("PropertyToken");
-    propertyToken = await PropertyToken.deploy();
-    // await propertyToken.deployed();
+  beforeEach(async () => {
+    [owner, investor1, investor2] = await ethers.getSigners();
+    SmartSukukToken = await ethers.getContractFactory("SmartSukukToken");
+    sukuk = await SmartSukukToken.deploy();
+    await sukuk.waitForDeployment();
   });
 
-  it("should deploy with correct name and symbol", async function () {
-    expect(await propertyToken.name()).to.equal("Property Token");
-    expect(await propertyToken.symbol()).to.equal("PROP");
+  it("should allow owner to create and issue a partition", async () => {
+    const partition = ethers.keccak256(ethers.toUtf8Bytes("RealEstate"));
+    await sukuk.addToWhitelist(investor1.address);
+    await sukuk.createPartition("RealEstate");
+    await sukuk.issueByPartition(partition, investor1.address, 1000n);
+
+    const bal = await sukuk.balanceOfByPartition(partition, investor1.address);
+    expect(bal).to.equal(1000n);
   });
 
-  it("should allow a user to tokenize a property and mint tokens", async function () {
-    const tx = await propertyToken
-      .connect(addr1)
-      .tokenizeProperty("Green Villa", 1000000, 1000);
-
-    await tx.wait();
-
-    // PropertyCounter should increment
-    expect(await propertyToken.propertyCounter()).to.equal(1);
-
-    // Check property details
-    const property = await propertyToken.getProperty(1);
-    expect(property.name).to.equal("Green Villa");
-    expect(property.valuation).to.equal(1000000);
-    expect(property.tokenSupply).to.equal(1000);
-    expect(property.owner).to.equal(addr1.address);
-    expect(property.exists).to.equal(true);
-
-    // Token balance of addr1 should increase
-    expect(await propertyToken.balanceOf(addr1.address)).to.equal(1000);
-  });
-
-  it("should revert if token supply is 0", async function () {
+  it("should restrict non-whitelisted users", async () => {
+    const partition = ethers.keccak256(ethers.toUtf8Bytes("Gold"));
+    await sukuk.createPartition("Gold");
     await expect(
-      propertyToken.connect(addr1).tokenizeProperty("Zero Villa", 500000, 0)
-    ).to.be.revertedWith("Supply must be > 0");
+      sukuk.issueByPartition(partition, investor2.address, 500n)
+    ).to.be.revertedWith("Not whitelisted");
   });
 
-  it("should revert when fetching a non-existing property", async function () {
-    await expect(propertyToken.getProperty(999)).to.be.revertedWith(
-      "Property does not exist"
-    );
+  it("should allow transfer within partition between whitelisted users", async () => {
+    const partition = ethers.keccak256(ethers.toUtf8Bytes("Bond"));
+    await sukuk.addToWhitelist(investor1.address);
+    await sukuk.addToWhitelist(investor2.address);
+    await sukuk.createPartition("Bond");
+    await sukuk.issueByPartition(partition, investor1.address, 2000n);
+
+    await sukuk.connect(investor1).transferByPartition(partition, investor2.address, 500n);
+    const bal2 = await sukuk.balanceOfByPartition(partition, investor2.address);
+    expect(bal2).to.equal(500n);
   });
 });

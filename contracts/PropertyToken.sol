@@ -1,55 +1,181 @@
+
+// pragma solidity ^0.8.20;
+
+// import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+// import "@openzeppelin/contracts/access/Ownable.sol";
+
+// contract PropertyToken is ERC20, Ownable {
+//     struct Property {
+//         uint256 id;
+//         string metadataHash; // IPFS hash or DB reference
+//         address owner;
+//         bool registered;
+//     }
+
+//     uint256 public nextPropertyId;
+//     mapping(uint256 => Property) public properties;
+
+//     // Whitelisting (for compliance)
+//     mapping(address => bool) public whitelist;
+
+//     event PropertyRegistered(uint256 indexed id, address indexed owner, string metadataHash);
+//     event Whitelisted(address indexed account);
+//     event RemovedFromWhitelist(address indexed account);
+
+//     constructor() ERC20("PropertyToken", "PROP") Ownable(msg.sender) {}
+
+//     // ----------------------
+//     // PROPERTY FUNCTIONS
+//     // ----------------------
+//     function registerProperty(string calldata metadataHash) external onlyOwner {
+//         properties[nextPropertyId] = Property({
+//             id: nextPropertyId,
+//             metadataHash: metadataHash,
+//             owner: msg.sender,
+//             registered: true
+//         });
+
+//         emit PropertyRegistered(nextPropertyId, msg.sender, metadataHash);
+//         nextPropertyId++;
+//     }
+
+//     // ----------------------
+//     // WHITELIST FUNCTIONS
+//     // ----------------------
+//     function addToWhitelist(address account) external onlyOwner {
+//         whitelist[account] = true;
+//         emit Whitelisted(account);
+//     }
+
+//     function removeFromWhitelist(address account) external onlyOwner {
+//         whitelist[account] = false;
+//         emit RemovedFromWhitelist(account);
+//     }
+
+//     // ----------------------
+//     // TOKEN FUNCTIONS
+//     // ----------------------
+//     function mint(address to, uint256 amount) external onlyOwner {
+//         require(whitelist[to], "Recipient not whitelisted");
+//         _mint(to, amount);
+//     }
+
+//     function _update(
+//         address from,
+//         address to,
+//         uint256 amount
+//     ) internal override {
+//         // Restrict transfers to whitelisted addresses only
+//         if (to != address(0)) {
+//             require(whitelist[to], "Recipient not whitelisted");
+//         }
+//         super._update(from, to, amount);
+//     }
+// }
+
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
-contract PropertyToken is ERC20, Ownable {
-    struct Property {
-        string name;         // e.g. "Green Villa"
-        uint256 valuation;   // e.g. 1000000 (in USD or any off-chain currency you agree on)
-        uint256 tokenSupply; // how many tokens minted to represent the property
-        address owner;       // who submitted/owns this property
-        bool exists;
+/**
+ * @title SmartSukukToken
+ * @dev Simplified ERC-1400-style tokenization contract without EnumerableSet (stable across OZ versions).
+ */
+contract SmartSukukToken is Ownable {
+    // --- Partition Structure (mapping inside struct) ---
+    struct Partition {
+        string name;
+        uint256 totalSupply;
+        mapping(address => uint256) balances;
     }
 
-    // propertyId → Property details
-    mapping(uint256 => Property) public properties;
-    uint256 public propertyCounter;
+    mapping(bytes32 => Partition) private partitions;
+    mapping(bytes32 => bool) public existingPartitions;
+    bytes32[] private partitionList;
 
-    constructor() ERC20("Property Token", "PROP") Ownable(msg.sender) {}
+    mapping(address => bool) public whitelistedInvestors;
 
-    /// @notice Tokenize a property (create record + mint tokens)
-    function tokenizeProperty(
-        string memory _name,
-        uint256 _valuation,
-        uint256 _tokenSupply
-    ) public {
-        require(_tokenSupply > 0, "Supply must be > 0");
+    string public name = "Smart Sukuk Token";
+    string public symbol = "SUKUK";
+    uint8 public decimals = 18;
 
-        // increase property ID
-        propertyCounter++;
+    event PartitionCreated(bytes32 indexed partitionId, string name);
+    event Issued(bytes32 indexed partitionId, address indexed to, uint256 amount);
+    event TransferredByPartition(bytes32 indexed partitionId, address from, address to, uint256 amount);
 
-        // create struct
-        properties[propertyCounter] = Property({
-            name: _name,
-            valuation: _valuation,
-            tokenSupply: _tokenSupply,
-            owner: msg.sender,
-            exists: true
-        });
-
-        // mint tokens for property owner
-        _mint(msg.sender, _tokenSupply);
+    modifier onlyWhitelisted(address user) {
+        require(whitelistedInvestors[user], "Not whitelisted");
+        _;
     }
 
-    /// @notice Get details of a property
-    function getProperty(uint256 _propertyId)
-        public
-        view
-        returns (Property memory)
+    constructor() Ownable(msg.sender) {}
+
+    // --- ADMIN FUNCTIONS ---
+
+    function addToWhitelist(address investor) external onlyOwner {
+        whitelistedInvestors[investor] = true;
+    }
+
+    function removeFromWhitelist(address investor) external onlyOwner {
+        whitelistedInvestors[investor] = false;
+    }
+
+    // Create a new partition (e.g., Real Estate Sukuk)
+    function createPartition(string calldata partitionName) external onlyOwner {
+        bytes32 partitionId = keccak256(abi.encodePacked(partitionName));
+        require(!existingPartitions[partitionId], "Partition already exists");
+
+        // initialize partition.name and mark exists
+        Partition storage p = partitions[partitionId];
+        p.name = partitionName;
+        existingPartitions[partitionId] = true;
+        partitionList.push(partitionId);
+
+        emit PartitionCreated(partitionId, partitionName);
+    }
+
+    // Issue tokens under a specific partition
+    function issueByPartition(bytes32 partitionId, address to, uint256 amount)
+        external
+        onlyOwner
+        onlyWhitelisted(to)
     {
-        require(properties[_propertyId].exists, "Property does not exist");
-        return properties[_propertyId];
+        require(existingPartitions[partitionId], "Partition not found");
+        Partition storage p = partitions[partitionId];
+        p.balances[to] += amount;
+        p.totalSupply += amount;
+        emit Issued(partitionId, to, amount);
+    }
+
+    // Transfer within a partition
+    function transferByPartition(bytes32 partitionId, address to, uint256 amount)
+        external
+        onlyWhitelisted(to)
+    {
+        require(existingPartitions[partitionId], "Partition not found");
+        Partition storage p = partitions[partitionId];
+        require(p.balances[msg.sender] >= amount, "Insufficient balance");
+
+        p.balances[msg.sender] -= amount;
+        p.balances[to] += amount;
+        emit TransferredByPartition(partitionId, msg.sender, to, amount);
+    }
+
+    // --- VIEW FUNCTIONS ---
+
+    function balanceOfByPartition(bytes32 partitionId, address user) external view returns (uint256) {
+        if (!existingPartitions[partitionId]) return 0;
+        return partitions[partitionId].balances[user];
+    }
+
+    function totalSupplyByPartition(bytes32 partitionId) external view returns (uint256) {
+        if (!existingPartitions[partitionId]) return 0;
+        return partitions[partitionId].totalSupply;
+    }
+
+    function getAllPartitions() external view returns (bytes32[] memory) {
+        return partitionList;
     }
 }
+
